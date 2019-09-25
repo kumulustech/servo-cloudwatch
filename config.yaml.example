@@ -1,0 +1,38 @@
+cloudwatch:
+  warmup: 30 # (seonds) Amount of time to delay before taking measurement
+  duration: 120 # (seconds) Used to derive the StartTime of the get_metric_data request. Driver uses current time for EndTime
+  # metrics item Structure is meant to conform with get_metric_data api calls (https://aws.amazon.com/premiumsupport/knowledge-center/cloudwatch-getmetricdata-api/)
+  metrics: 
+    # Within each metric object, you must specify either Expression or MetricStat but not both.
+    - ID: exampleMetric1 # Name of metric reported to backend, also used as the ID required in get_metric_data calls
+        # NOTE: ID must start with a lowercase letter and may only consist of letters, numbers, and underscores
+      MetricStat:
+        Metric:
+          MetricName: NetworkPacketsOut # Required. Name of metric used for the MetricName for get_metric_data and put_metric_data
+          Namespace: AWS/EC2 # Required. Namespace of desired metric (always defined during metric creation)
+          Dimensions: # A dimension is a name/value pair that is part of the identity of a metric. There can be 0 to 10 dimensions to a metric.
+          - Name: AutoScalingGroupName # The name of the dimension.
+            Value: ws2012-sandbox-asg # The value representing the dimension measurement.
+        Period: 120 # Required. Period, in seconds, to use when retrieveing the metric
+        Stat: Sum # Required. The statistic to return. It can include any CloudWatch statistic or extended statistic.
+        Unit: Count # Optional. If you omit Unit in your request, all data that was collected with any unit is returned, along with the corresponding units that were specified
+      Label: "Stat1" # Optional. If Label is omitted, CloudWatch generates a default.
+      ReturnData: false # Defaults to true, determines whether data will be included in results. Useful if only interested in expression data
+    - ID: exampleMetric2
+      MetricStat:
+        MetricName: NetworkPacketsIn
+        # ... (same as above)
+    - ID: exampleMetricExpression
+      Expression: 'exampleMetric1 + exampleMetric2'
+      Label: "TotalThroughput"
+    - ID: exampleMetricInstances
+      MetricStat:
+        Metric:
+          MetricName: NetworkPacketsOut
+          Namespace: AWS/EC2
+          Dimensions:
+          - Name: InstanceId
+            AsgName: ws2012-sandbox-asg # Custom property provided by driver to query asg for instance Ids to use in InstanceId dimension
+        Period:
+        Stat: Sum
+        Unit: Count

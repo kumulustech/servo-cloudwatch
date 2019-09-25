@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+
+import copy
+import os
+import requests
+import sys
+import datetime
+
+if 'pytest' in sys.modules:
+    from base_measure import Measure, ST_FAILED, ST_BAD_REQUEST
+else:
+    from measure import Measure, ST_FAILED, ST_BAD_REQUEST
+
+import yaml
+import boto3 # AWS SDK
+
+DESC="Cloudwatch measure driver for Opsani Optune"
+VERSION="0.1.0"
+HAS_CANCEL=True
+PROGRESS_INTERVAL=30
+
+config_path = os.environ.get('OPTUNE_CONFIG', './config.yaml')
+
+class CloudWatchDriver(Measure):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not (self.args.info):
+            self.config = self.load_config()
+            self.check_config(self.config)
+            self.cloudwatch = boto3.client('cloudwatch')
+            self.cw_metric_paginator = self.cloudwatch.get_paginator('get_metric_data')
+            self.asg = boto3.client('autoscaling')
+
+    @staticmethod
+    def load_config():
+        try:
+            config = yaml.safe_load(open(config_path))
+        except yaml.YAMLError as e:
+            raise Exception('Could not parse config file located at "{}". '
+                            'Please check its contents. Error: {}'.format(config_path, str(e)))
+        try:
+            return config['cloudwatch']
+        except KeyError:
+            raise KeyError('No `cloudwatch` configuration has been provided in config file located '
+                           'at {}'.format(config_path))
+
+    def check_config(self, config):
+        if not os.path.isdir('/root/.aws') and not os.path.isdir('{}/.aws'.format(os.path.expanduser('~'))):
+            assert os.environ.get('AWS_ACCESS_KEY_ID', '') != '' and os.environ.get('AWS_SECRET_ACCESS_KEY', '') != '', 'No Amazon S3 access key was provided. ' \
+                                            'Please refer to README.md.'
+            assert os.environ.get('AWS_DEFAULT_REGION', '') != '', 'No Amazon S3 default region was provided. ' \
+                                            'Please refer to README.md.'
+
+        assert isinstance(config, dict), 'Cloudwatch Configuration was malformed in "{}". ' \
+            'Expected dict, found {}'.format(config_path, config.__class__.__name__)
+
+        bad_top_keys = config.keys() - {'metrics', 'warmup', 'duration'}
+        if bad_top_keys:
+            raise Exception('Unknown top level key(s) in `cloudwatch` section of file {}: {}'.format(config_path, bad_top_keys))
+
+        duration = config.get('duration')
+        assert isinstance(duration, int) and duration >= 0, 'Cloudwatch config requires duration, must be integer (greater than zero). Found {}'.format(duration)
+        warmup = config.get('warmup')
+        if warmup:
+            assert isinstance(warmup, int) and warmup >= 0, 'Cloudwatch warmup must be integer (greater than zero) when specified. Found {}'.format(warmup)
+
+        metrics = config.get('metrics')
+        assert isinstance(metrics, list), 'The `metrics` attribute in `cloudwatch` section must be a list, found {}'.format(type(metrics).__name__)
+
+        mIdSet = set()
+        # Main interest here is validating driver side logic such as AsgName. AWS backend should be verbose enough for other config items
+        for metric in metrics:
+            assert isinstance(metric, dict), 'The `metrics` attribute in `cloudwatch` section must be a list of dicts, found {}'.format(type(metric).__name__)
+            mId = metric.get('Id')
+            assert isinstance(mId, str), 'Metric Id `{}` must be a string, found {}'.format(mId, type(mId).__name__)
+            assert mId not in mIdSet, 'Duplicated metric Id detected: {}'.format(mId)
+            mIdSet.add(mId)
+
+            mStat = metric.get('MetricStat')
+            mExp = metric.get('Expression')
+            assert not(mStat and mExp), 'Metric Id `{}` was malformed, contains both MetricStat and Expression'.format(mId)
+
+            if mExp:
+                assert isinstance(mExp, str), 'Metric Id `{}` Expression must be a string, found {}'.format(mId, type(mExp).__name__)
+            else:
+                assert isinstance(mStat, dict), 'Metric Id `{}` MetricStat must be a dict (when no Expression is provided), found {}'.format(mId, type(mStat).__name__)
+                mStatMetric = mStat.get('Metric')
+                assert isinstance(mStatMetric, dict), 'Metric Id `{}`[MetricStat][Metric] must be a dict, found {}'.format(mId, type(mStatMetric).__name__)
+                dimensions = mStatMetric.get('Dimensions')
+                assert isinstance(dimensions, list), 'Metric Id `{}`[MetricStat][Metric][Dimensions] must be a list, found {}'.format(mId, type(dimensions).__name__)
+                for d in dimensions:
+                    assert isinstance(d, dict), 'Metric Id `{}`[MetricStat][Metric][Dimensions] items must be dicts, found {}'.format(mId, type(d).__name__)
+                    asgName = d.get('AsgName')
+                    if asgName:
+                        assert isinstance(asgName, str), 'Metric Id `{}` AsgName must be string, found {}'.format(mId, type(asgName).__name__)
+                        assert d.get("Name") == "InstanceId", 'Metric Id `{}` does not support AsgName for dimension type {}'.format(mId, d.get("Name"))
+                    
+
+
+    def handle_cancel(self, signal, frame):
+        err = "Exiting due to signal: %s"%signal
+        self.print_measure_error(err, ST_FAILED)
+        sys.exit(3)
+
+
+    def describe(self, filterIdList=None):
+        metrics = dict()
+        for metric in self.config['metrics']:
+            if filterIdList and metric['Id'] not in filterIdList:
+                continue
+
+            d = dict()
+            if metric.get('MetricStat') and metric['MetricStat'].get('Unit'):
+                d['unit'] = metric['MetricStat']['Unit']
+            if metric.get('Label'):
+                d['label'] = metric['Label']
+            metrics[metric['Id']] = d
+
+        return metrics
+
+
+    def measure(self):
+        # TODO: implement warmup
+        try:
+            in_metrics = self.input_data['metrics']
+        except:
+            raise Exception('Input configuration is missing "metrics"')
+        if not in_metrics or not isinstance(in_metrics, list):
+            raise Exception('Invalid input; metrics must be list of metric IDs contained in configuration. found: {}'.format(in_metrics))
+
+        ret_metrics = self.describe(filterIdList=in_metrics)
+
+        end_time = datetime.datetime.utcnow()
+        start_time = end_time - datetime.timedelta(seconds=self.config['duration'])
+
+        nonAsgNameQueries = []
+        for metricId in in_metrics:
+            metric = [m for m in self.config['metrics'] if m['Id'] == metricId][0]
+            if not metric:
+                raise Exception("No configuration found for input metric ID {}".format(metricId))
+            # Check for non-AWS AsgName logic and handle it. Otherwise, config can be directly converted to json
+            if metric.get('MetricStat'):
+                for dim in metric['MetricStat']['Metric']['Dimensions']:
+                    asgName = dim.get('AsgName')
+                    if asgName:
+                        dim.pop('AsgName')
+                        break
+                
+                if not asgName:
+                    nonAsgNameQueries.append(metric)
+                    ret_metrics[metric['Id']]['values'] = []
+                else:
+                    # get asg insts
+                    instIds = [ i["InstanceId"] for i in self.get_asg_instances(asgName)
+                                # terminated instances continue to show up for a while after termination
+                                if i["LifecycleState"] == "InService"
+                    ]
+
+                    instMetrics = { instId: [] for instId in instIds }
+
+                    instLen = len(instIds)
+                    if instLen < 1:
+                        self.print_measure_error("No instances found to measure in ASG {}".format(asgName), ST_BAD_REQUEST)
+                        continue
+
+                    while instLen > 0: # can only query 100 instances per api call
+                        curInsts = instIds[:100]
+                        instIds = instIds[100:]
+                        instLen = len(instIds)
+
+                        # query metric foreach inst and populate output accordingly
+                        metQueries = [self.create_instance_query(metric, i) for i in curInsts]
+
+                        page_iterator = self.cw_metric_paginator.paginate(
+                            StartTime=start_time,
+                            EndTime=end_time,
+                            MetricDataQueries= metQueries
+                        )
+
+                        if not page_iterator:
+                            raise Exception("Unable to retrieve metrics for EC2 instances via boto3 client. Page Iterator: {}".format(page_iterator))
+                        
+                        	
+                        for page in page_iterator:
+                            # Check for errors and report # TODO: may not need to report all messages
+                            if page.get('Messages'):
+                                for m in page['Messages']:
+                                    self.print_measure_error("Cloudwatch returned Message for metric {}: {}".format(metric['Id'], m['Value']), m['Code'])
+                            
+                            for m_result in page['MetricDataResults']:
+                                data = [ list(ts_val) for ts_val in zip([str(t) for t in m_result['Timestamps']], m_result['Values']) ]
+                                curId = 'i-{}'.format(m_result['Id'].split('_')[-1])
+                                instMetrics[curId].extend(data)
+
+                    noDataInstIds = [i for i in instIds if not instMetrics.get(i)]
+                    if noDataInstIds:
+                        self.print_measure_error("Cloudwatch returned no metrics for instance(s): {}".format(', '.join(noDataInstIds)), ST_BAD_REQUEST)
+
+                    # metrics: { <metric>: { unit: '<unit>', values: [ { id: "<instanceID>", "data": [ [<timestamp>, <value>] ,] } ]}}
+                    if len(instMetrics) == 1:
+                        instId, instData = list(instMetrics.items())[0]
+                        ret_metrics[metric['Id']]['value'] = { 'id': instId, 'data': instData }
+                    else:
+                        for instId, data in instMetrics:
+                            ret_metrics[metric['Id']]['values'] = [ { 'id': instId, 'data': instData } for instId, instData in list(instMetrics.items()) ]
+
+                    continue # skip rest of for loop, consists of fall through logic
+
+        # query non-AsgName metrics and populate output accordingly
+        qLen = len(nonAsgNameQueries)
+        while qLen > 0:# can only query 100 metrics per api call
+            curQueries = nonAsgNameQueries[:100]
+            nonAsgNameQueries = nonAsgNameQueries[100:]
+            qLen = len(nonAsgNameQueries)
+
+            page_iterator = self.cw_metric_paginator.paginate(
+                StartTime=start_time,
+                EndTime=end_time,
+                MetricDataQueries= curQueries
+            )
+
+            if not page_iterator:
+                raise Exception("Unable to retrieve metrics for EC2 instances via boto3 client. Page Iterator: {}".format(page_iterator))
+            
+                
+            for page in page_iterator:
+                # Check for errors and report # TODO: may not need to report all messages
+                if page.get('Messages'):
+                    for m in page['Messages']:
+                        self.print_measure_error("Cloudwatch returned Message for metric {}: {}".format(metric['Id'], m['Value']), m['Code'])
+                
+                for m_result in page['MetricDataResults']:
+                    data = [ list(ts_val) for ts_val in zip([str(t) for t in m_result['Timestamps']], m_result['Values']) ]
+                    ret_metrics[m_result['Id']]['values'].extend(data)
+
+            for q in curQueries:
+                valLen = len(ret_metrics[q['Id']]['values'])
+                if valLen < 2:
+                    ret_metrics[q['Id']]['value'] = ret_metrics[q['Id']].pop('values')[0][1] if valLen == 1 else None
+                
+        return ret_metrics, {} # empty dict is annotations
+
+    def create_instance_query(self, metric, instanceId):
+        ret_query = copy.deepcopy(metric)
+        ret_query['Id'] = '{}_{}'.format(ret_query['Id'], instanceId.replace('-', '_'))# Note: dashes are invalid for metrice query IDs. i-07c00c8cedd8ad5d6
+        [d for d in ret_query['MetricStat']['Metric']['Dimensions'] if d['Name'] == "InstanceId"][0]['Value'] = instanceId
+        return ret_query
+
+    def get_asg_info(self, gname):
+        a = self.asg.describe_auto_scaling_groups(AutoScalingGroupNames=[gname])
+        # describe_auto_.. doesn't fail if asg not found, check for it:
+        if not a.get("AutoScalingGroups"):
+            raise Exception("Auto-scaling Group {} does not exist".format(gname))
+        if len(a["AutoScalingGroups"]) > 1:
+            raise Exception("Auto-scaling Group name {} returned multiple results: {}".format(gname, a))
+        return a["AutoScalingGroups"][0]
+
+    def get_asg_instances(self, gname):
+        return self.get_asg_info(gname).get("Instances", [])

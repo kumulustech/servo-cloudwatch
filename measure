@@ -201,7 +201,7 @@ class CloudWatchDriver(Measure):
                         instId, instData = list(instMetrics.items())[0]
                         ret_metrics[metric['Id']]['value'] = { 'id': instId, 'data': instData }
                     else:
-                        for instId, data in instMetrics:
+                        for instId, data in instMetrics.items():
                             ret_metrics[metric['Id']]['values'] = [ { 'id': instId, 'data': instData } for instId, instData in list(instMetrics.items()) ]
 
                     continue # skip rest of for loop, consists of fall through logic
@@ -236,7 +236,7 @@ class CloudWatchDriver(Measure):
             for q in curQueries:
                 valLen = len(ret_metrics[q['Id']]['values'])
                 if valLen < 2:
-                    ret_metrics[q['Id']]['value'] = ret_metrics[q['Id']].pop('values')[0][1] if valLen == 1 else None
+                    ret_metrics[q['Id']]['value'] = (ret_metrics[q['Id']].pop('values')[0][1] if valLen == 1 else None)
                 
         return ret_metrics, {} # empty dict is annotations
 

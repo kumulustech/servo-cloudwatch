@@ -258,3 +258,7 @@ class CloudWatchDriver(Measure):
 
     def get_asg_instances(self, gname):
         return self.get_asg_info(gname).get("Instances", [])
+
+if __name__ == '__main__':
+    driver = CloudWatchDriver(cli_desc=DESC, supports_cancel=HAS_CANCEL, version=VERSION)
+    driver.run()

@@ -154,7 +154,7 @@ class CloudWatchDriver(Measure):
                 
                 if not asgName:
                     nonAsgNameQueries.append(metric)
-                    ret_metrics[metric['Id']] = {'value': { 'id': 0, 'data': [] }}
+                    ret_metrics[metric['Id']] = {'values': [{ 'id': 0, 'data': [] }]}
                 else:
                     # get asg insts
                     instIds = [ i["InstanceId"] for i in self.get_asg_instances(asgName)
@@ -203,12 +203,7 @@ class CloudWatchDriver(Measure):
                         self.print_measure_error("Cloudwatch returned no metrics for instance(s): {}".format(', '.join(noDataInstIds)), ST_BAD_REQUEST)
 
                     # metrics: { <metric>: { unit: '<unit>', values: [ { id: "<instanceID>", "data": [ [<timestamp>, <value>] ,] } ]}}
-                    if len(instMetrics) == 1:
-                        instId, instData = list(instMetrics.items())[0]
-                        ret_metrics[metric['Id']] = {'value':{ 'id': instId, 'data': instData }}
-                    else:
-                        for instId, data in instMetrics.items():
-                            ret_metrics[metric['Id']] = {'values': [ { 'id': instId, 'data': instData } for instId, instData in list(instMetrics.items()) ]}
+                    ret_metrics[metric['Id']] = {'values': [ { 'id': instId, 'data': instData } for instId, instData in list(instMetrics.items()) ]}
 
                     continue # skip rest of for loop, consists of fall through logic
 
@@ -237,7 +232,7 @@ class CloudWatchDriver(Measure):
                 
                 for m_result in page['MetricDataResults']:
                     data = [ list(ts_val) for ts_val in zip([int(t.timestamp()) for t in m_result['Timestamps']], m_result['Values']) ]
-                    ret_metrics[m_result['Id']]['value']['data'].extend(data)
+                    ret_metrics[m_result['Id']]['values'][0]['data'].extend(data)
                 
         return ret_metrics, {} # empty dict is annotations
 

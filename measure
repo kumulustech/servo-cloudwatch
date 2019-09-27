@@ -55,7 +55,7 @@ class CloudWatchDriver(Measure):
         assert isinstance(config, dict), 'Cloudwatch Configuration was malformed in "{}". ' \
             'Expected dict, found {}'.format(config_path, config.__class__.__name__)
 
-        bad_top_keys = config.keys() - {'metrics', 'warmup', 'duration'}
+        bad_top_keys = config.keys() - {'metrics', 'warmup', 'delay', 'duration'}
         if bad_top_keys:
             raise Exception('Unknown top level key(s) in `cloudwatch` section of file {}: {}'.format(config_path, bad_top_keys))
 
@@ -126,15 +126,21 @@ class CloudWatchDriver(Measure):
             raise Exception('Invalid input; metrics must be list of metric IDs contained in configuration. found: {}'.format(in_metrics))
 
         ret_metrics = {}
+        
+        warmup = self.config.get('warmup')
+        if warmup:
+            self.progress_message = 'Warmup: Waiting {} seconds'.format(warmup)
+            self.print_progress()
+            time.sleep(warmup)
 
         end_time = datetime.datetime.utcnow()
         start_time = end_time - datetime.timedelta(seconds=self.config['duration'])
         
-        warmup = self.config.get('warmup')
-        if warmup:
-            self.progress_message = 'Waiting {} seconds'.format(warmup)
+        delay = self.config.get('delay')
+        if delay:
+            self.progress_message = 'Delay: Waiting {} seconds'.format(delay)
             self.print_progress()
-            time.sleep(warmup)
+            time.sleep(delay)
 
 
         self.progress_message = 'Querying metrics'

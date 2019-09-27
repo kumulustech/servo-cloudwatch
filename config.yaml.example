@@ -1,5 +1,6 @@
 cloudwatch:
-  warmup: 30 # (seonds) Amount of time to delay before taking measurement
+  warmup: 30 # (seonds) Amount of time to wait before setting start time and end time of the measurement duration, is included in the duration of the measurement
+  delay: 300 # (seconds) Amount of time to wait before making acutual metric query, is not included in the duration of the measurement
   duration: 120 # (seconds) Used to derive the StartTime of the get_metric_data request. Driver uses current time for EndTime
   # metrics item Structure is meant to conform with get_metric_data api calls (https://aws.amazon.com/premiumsupport/knowledge-center/cloudwatch-getmetricdata-api/)
   metrics: 

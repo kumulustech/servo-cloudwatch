@@ -104,12 +104,9 @@ class CloudWatchDriver(Measure):
         sys.exit(3)
 
 
-    def describe(self, filterIdList=None):
+    def describe(self):
         metrics = dict()
         for metric in self.config['metrics']:
-            if filterIdList and metric['Id'] not in filterIdList:
-                continue
-
             d = dict()
             if metric.get('MetricStat') and metric['MetricStat'].get('Unit'):
                 d['unit'] = metric['MetricStat']['Unit']
@@ -128,13 +125,20 @@ class CloudWatchDriver(Measure):
         if not in_metrics or not isinstance(in_metrics, list):
             raise Exception('Invalid input; metrics must be list of metric IDs contained in configuration. found: {}'.format(in_metrics))
 
-        ret_metrics = self.describe(filterIdList=in_metrics)
-
-        time.sleep(self.config.get('warmup', 0))
+        ret_metrics = {}
 
         end_time = datetime.datetime.utcnow()
         start_time = end_time - datetime.timedelta(seconds=self.config['duration'])
+        
+        warmup = self.config.get('warmup')
+        if warmup:
+            self.progress_message = 'Waiting {} seconds'.format(warmup)
+            self.print_progress()
+            time.sleep(warmup)
 
+
+        self.progress_message = 'Querying metrics'
+        self.print_progress()
         nonAsgNameQueries = []
         for metricId in in_metrics:
             metric = [m for m in self.config['metrics'] if m['Id'] == metricId][0]
@@ -150,7 +154,7 @@ class CloudWatchDriver(Measure):
                 
                 if not asgName:
                     nonAsgNameQueries.append(metric)
-                    ret_metrics[metric['Id']]['values'] = []
+                    ret_metrics[metric['Id']] = {'value': { 'id': 0, 'data': [] }}
                 else:
                     # get asg insts
                     instIds = [ i["InstanceId"] for i in self.get_asg_instances(asgName)
@@ -190,7 +194,7 @@ class CloudWatchDriver(Measure):
                                     self.print_measure_error("Cloudwatch returned Message for metric {}: {}".format(metric['Id'], m['Value']), m['Code'])
                             
                             for m_result in page['MetricDataResults']:
-                                data = [ list(ts_val) for ts_val in zip([str(t) for t in m_result['Timestamps']], m_result['Values']) ]
+                                data = [ list(ts_val) for ts_val in zip([int(t.timestamp()) for t in m_result['Timestamps']], m_result['Values']) ]
                                 curId = 'i-{}'.format(m_result['Id'].split('_')[-1])
                                 instMetrics[curId].extend(data)
 
@@ -201,10 +205,10 @@ class CloudWatchDriver(Measure):
                     # metrics: { <metric>: { unit: '<unit>', values: [ { id: "<instanceID>", "data": [ [<timestamp>, <value>] ,] } ]}}
                     if len(instMetrics) == 1:
                         instId, instData = list(instMetrics.items())[0]
-                        ret_metrics[metric['Id']]['value'] = { 'id': instId, 'data': instData }
+                        ret_metrics[metric['Id']] = {'value':{ 'id': instId, 'data': instData }}
                     else:
                         for instId, data in instMetrics.items():
-                            ret_metrics[metric['Id']]['values'] = [ { 'id': instId, 'data': instData } for instId, instData in list(instMetrics.items()) ]
+                            ret_metrics[metric['Id']] = {'values': [ { 'id': instId, 'data': instData } for instId, instData in list(instMetrics.items()) ]}
 
                     continue # skip rest of for loop, consists of fall through logic
 
@@ -224,7 +228,7 @@ class CloudWatchDriver(Measure):
             if not page_iterator:
                 raise Exception("Unable to retrieve metrics for EC2 instances via boto3 client. Page Iterator: {}".format(page_iterator))
             
-                
+            # ret_metrics[metric['Id']] = {'value': { 'id': 0, 'data': [] }}
             for page in page_iterator:
                 # Check for errors and report # TODO: may not need to report all messages
                 if page.get('Messages'):
@@ -232,13 +236,8 @@ class CloudWatchDriver(Measure):
                         self.print_measure_error("Cloudwatch returned Message for metric {}: {}".format(metric['Id'], m['Value']), m['Code'])
                 
                 for m_result in page['MetricDataResults']:
-                    data = [ list(ts_val) for ts_val in zip([str(t) for t in m_result['Timestamps']], m_result['Values']) ]
-                    ret_metrics[m_result['Id']]['values'].extend(data)
-
-            for q in curQueries:
-                valLen = len(ret_metrics[q['Id']]['values'])
-                if valLen < 2:
-                    ret_metrics[q['Id']]['value'] = (ret_metrics[q['Id']].pop('values')[0][1] if valLen == 1 else None)
+                    data = [ list(ts_val) for ts_val in zip([int(t.timestamp()) for t in m_result['Timestamps']], m_result['Values']) ]
+                    ret_metrics[m_result['Id']]['value']['data'].extend(data)
                 
         return ret_metrics, {} # empty dict is annotations
 

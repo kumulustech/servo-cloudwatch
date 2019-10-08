@@ -38,7 +38,9 @@ ADD https://raw.githubusercontent.com/kumulustech/servo-cloudwatch/master/measur
 RUN chmod a+rwx /servo/adjust /servo/measure /servo/servo /servo/measure.d/01ab /servo/measure.d/02cloudwatch
 RUN chmod a+rw /servo/measure.py /servo/adjust.py encoders/base.py encoders/dotnet.py
 
-# TODO: configure ab measure for 15 minute runs
+# TODO: remove when testing complete
+RUN sed -i 's/30,         # warmup time in seconds/0,         # warmup time in seconds/' measure.d/01ab
+RUN sed -i 's/180,         # time limit in seconds/900,         # time limit in seconds' measure.d/01ab
 
 ENV PYTHONUNBUFFERED=1
 

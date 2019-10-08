@@ -40,7 +40,7 @@ RUN chmod a+rw /servo/measure.py /servo/adjust.py encoders/base.py encoders/dotn
 
 # TODO: remove when testing complete
 RUN sed -i 's/30,         # warmup time in seconds/0,         # warmup time in seconds/' measure.d/01ab
-RUN sed -i 's/180,         # time limit in seconds/900,         # time limit in seconds' measure.d/01ab
+RUN sed -i 's/180,         # time limit in seconds/900,         # time limit in seconds/' measure.d/01ab
 
 ENV PYTHONUNBUFFERED=1
 

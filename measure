@@ -46,7 +46,9 @@ class CloudWatchDriver(Measure):
                            'at {}'.format(config_path))
 
     def check_config(self, config):
-        if not os.path.isdir('/root/.aws') and not os.path.isdir('{}/.aws'.format(os.path.expanduser('~'))):
+        if not os.path.isdir('/root/.aws') \
+        and not os.path.isdir('{}/.aws'.format(os.path.expanduser('~'))) \
+        and not os.popen("curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/").read():
             assert os.environ.get('AWS_ACCESS_KEY_ID', '') != '' and os.environ.get('AWS_SECRET_ACCESS_KEY', '') != '', 'No Amazon S3 access key was provided. ' \
                                             'Please refer to README.md.'
             assert os.environ.get('AWS_DEFAULT_REGION', '') != '', 'No Amazon S3 default region was provided. ' \

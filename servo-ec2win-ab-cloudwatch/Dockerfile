@@ -5,7 +5,7 @@ WORKDIR /servo
 
 # Install dependencies
 RUN pip3 install requests PyYAML python-dateutil boto3 && \
-	apt-get update && apt-get install -y --no-install-recommends apache2-utils
+	apt-get update && apt-get install -y --no-install-recommends apache2-utils curl
     
 
 # Change /usr/bin/python3 => /usr/local/bin/python3, since the first is older,
@@ -23,6 +23,7 @@ ADD https://raw.githubusercontent.com/opsani/servo/master/servo \
     https://raw.githubusercontent.com/opsani/servo/master/measure.py \
     https://raw.githubusercontent.com/kumulustech/servo-ec2win/master/adjust \
     https://raw.githubusercontent.com/kumulustech/servo-agg/master/measure \
+    https://raw.githubusercontent.com/opsani/servo-agg/master/util.py \
     /servo/
 
 ADD https://raw.githubusercontent.com/opsani/servo/master/encoders/base.py \ 

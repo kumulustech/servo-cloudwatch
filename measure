@@ -162,7 +162,7 @@ class CloudWatchDriver(Measure):
                 
                 if not asgName:
                     nonAsgNameQueries.append(metric)
-                    ret_metrics[metric['Id']] = {'values': [{ 'id': 0, 'data': [] }]}
+                    ret_metrics[metric['Id']] = {'values': [{ 'id': '0', 'data': [] }]}
                 else:
                     # get asg insts
                     instIds = [ i["InstanceId"] for i in self.get_asg_instances(asgName)
